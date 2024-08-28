@@ -11,6 +11,7 @@ from openai import AzureOpenAI, OpenAI, RateLimitError
 from rich import print
 
 from .base_translator import Base
+from .agent import agent_translate
 from ..config import config
 
 CHATGPT_CONFIG = config["translator"]["chatgptapi"]
@@ -161,6 +162,24 @@ class ChatGPTAPI(Base):
 
         return t_text
 
+    def get_translation_v2(self, text):
+        self.rotate_key()
+        self.rotate_model()
+
+        t_text = agent_translate(
+            client=self.openai_client,
+            source_lang="English",
+            target_lang="Chinese",
+            source_text=text,
+            country="China",
+            model=self.model
+        )
+
+        if self.context_flag:
+            self.save_context(text, t_text)
+
+        return t_text
+
     def save_context(self, text, t_text):
         if self.context_paragraph_limit > 0:
             self.context_list.append(text)
@@ -182,7 +201,7 @@ class ChatGPTAPI(Base):
 
         while attempt_count < max_attempts:
             try:
-                t_text = self.get_translation(text)
+                t_text = self.get_translation_v2(text)
                 break
             except RateLimitError as e:
                 # todo: better sleep time? why sleep alawys about key_len
