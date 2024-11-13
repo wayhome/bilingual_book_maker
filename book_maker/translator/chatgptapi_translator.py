@@ -145,21 +145,71 @@ class ChatGPTAPI(Base):
 
     def get_translation(self, text):
         self.rotate_key()
-        self.rotate_model()  # rotate all the model to avoid the limit
+        self.rotate_model()
 
-        completion = self.create_chat_completion(text)
+        # Step 1: Initial translation
+        initial_completion = self.create_chat_completion(text)
+        initial_translation = (
+            initial_completion.choices[0].message.content.encode("utf8").decode() or ""
+        )
 
-        # TODO work well or exception finish by length limit
-        # Check if content is not None before encoding
-        if completion.choices[0].message.content is not None:
-            t_text = completion.choices[0].message.content.encode("utf8").decode() or ""
-        else:
-            t_text = ""
+        # Step 2: Reflection
+        reflection_prompt = f"""Please carefully review the source text and translation, and provide improvement suggestions. Consider:
+        (i) Accuracy (fix additions, mistranslations, omissions, or untranslated text)
+        (ii) Fluency (apply {self.language} grammar, spelling, and punctuation rules, ensure no unnecessary repetition)
+        (iii) Style (ensure translation reflects source style and considers cultural context)
+        (iv) Terminology (ensure consistent term usage that reflects the source domain)
+
+        Source: {text}
+        Translation: {initial_translation}
+
+        Please list specific improvement suggestions. Each suggestion should target a specific part of the translation."""
+
+        reflection_completion = self.openai_client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a professional translation expert.",
+                },
+                {"role": "user", "content": reflection_prompt},
+            ],
+            temperature=self.temperature,
+        )
+        reflection = reflection_completion.choices[0].message.content
+
+        # Step 3: Improvement
+        improvement_prompt = f"""Please improve the translation based on the expert suggestions. Focus on:
+        (i) Accuracy (fix additions, mistranslations, omissions, or untranslated text)
+        (ii) Fluency (apply {self.language} grammar rules, avoid repetition)
+        (iii) Style (maintain source style)
+        (iv) Terminology (use appropriate and consistent terms)
+
+        Source: {text}
+        Initial Translation: {initial_translation}
+        Expert Suggestions: {reflection}
+
+        IMPORTANT: Return ONLY the improved translation without any explanations, suggestions, or other text."""
+
+        final_completion = self.openai_client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a professional translation editor. Return ONLY the improved translation without any additional text.",
+                },
+                {"role": "user", "content": improvement_prompt},
+            ],
+            temperature=self.temperature,
+        )
+        final_translation = (
+            final_completion.choices[0].message.content.encode("utf8").decode() or ""
+        )
 
         if self.context_flag:
-            self.save_context(text, t_text)
+            self.save_context(text, final_translation)
 
-        return t_text
+        return final_translation
 
     def save_context(self, text, t_text):
         if self.context_paragraph_limit > 0:
